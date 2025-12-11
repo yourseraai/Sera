@@ -1,73 +1,59 @@
-// pages/api/webhook.js
-// Next.js API route for Telegram webhook
-import fetch from "node-fetch";
-
-const DEDUPE_TTL_MS = 60 * 1000; // 60s
-
-if (!global.__recentTelegramUpdates) {
-  // store recent update_ids to avoid duplicates (in-memory)
-  global.__recentTelegramUpdates = new Map();
-}
+import axios from "axios";
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).send("ok");
-
-  const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-  if (!TELEGRAM_TOKEN) {
-    console.error("TELEGRAM_TOKEN missing");
-    return res.status(500).json({ ok: false, error: "TELEGRAM_TOKEN not set" });
-  }
-
-  const body = req.body;
-  const updateId = body?.update_id;
-
-  // quick dedupe
-  if (updateId && global.__recentTelegramUpdates.has(updateId)) {
-    // already saw this update recently — ignore
-    return res.status(200).json({ ok: true, info: "duplicate_ignored" });
-  }
-  if (updateId) {
-    global.__recentTelegramUpdates.set(updateId, Date.now());
-    // clean up after TTL
-    setTimeout(() => global.__recentTelegramUpdates.delete(updateId), DEDUPE_TTL_MS);
-  }
-
   try {
-    // find message payload
-    const message = body.message || body.edited_message || body.callback_query?.message;
-    if (!message) {
-      return res.status(200).json({ ok: true, info: "no_message_payload" });
+    const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+    // Sanity check
+    if (!OPENAI_API_KEY) {
+      console.log("OPENAI KEY MISSING");
+      return res.status(200).send("OpenAI key missing — ping reply only.");
     }
 
+    const update = req.body;
+    const message = update.message;
+
+    if (!message || !message.text) {
+      return res.status(200).send("No text");
+    }
+
+    const userText = message.text;
     const chatId = message.chat.id;
-    const text = (message.text || message.caption || "").toString();
 
-    // --- Simple reply logic (customize as needed) ---
-    let replyText = "Haan bolo — Sera sun rahi hai 🙂";
+    // Call OPENAI API
+    const aiRes = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "Tum Sera ho — ek friendly Hinglish AI bot." },
+          { role: "user", content: userText }
+        ],
+        max_tokens: 150
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-    // example: respond differently to greetings
-    if (/^\s*(hi|hello|hey|hey mera name|kya haal)/i.test(text)) {
-      replyText = "Main theek hoon — bata kya chahiye?";
-    }
+    const reply = aiRes.data.choices[0].message.content;
 
-    // send single message
-    const tgResp = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    // Send reply to Telegram
+    await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+      {
         chat_id: chatId,
-        text: replyText,
-        parse_mode: "HTML"
-      })
-    });
+        text: reply
+      }
+    );
 
-    const tgJson = await tgResp.json();
-
-    // return 200 with telegram response for debugging
-    return res.status(200).json({ ok: true, telegram: tgJson });
-  } catch (err) {
-    console.error("webhook error:", err);
-    // still return 200 so Telegram doesn't retry repeatedly
-    return res.status(200).json({ ok: false, error: String(err) });
+    return res.status(200).send("OK");
+  } catch (e) {
+    console.error("ERROR:", e?.response?.data || e.message);
+    return res.status(200).send("Error happened");
   }
 }
