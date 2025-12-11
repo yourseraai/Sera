@@ -1,72 +1,69 @@
 // pages/api/webhook.js
 import axios from "axios";
 
-// Dedup (temporary memory). Stops double replies.
+// Dedup to avoid double replies
 const seen = new Set();
 
-// -------------------------------------------
-// GOD-MODE SERA SYSTEM PROMPT
-// -------------------------------------------
+// -----------------------------------------------------
+// GOD-MODE SERA SYSTEM PROMPT (FINAL V3.9)
+// -----------------------------------------------------
 function systemPrompt({ edgy = false } = {}) {
   const base = `
-Tum SERA ho — ek ultra-sophisticated female-presenting Personal + Professional AI OPERATOR.
-Tumhari job: user ka kaam asaan banana, time bachana, aur ekdum reliable operator ki tarah behave karna.
-Default language: Hinglish. Simple, clean, human-like, slightly witty.
+Tum SERA ho — ek female-presenting, ultra-smart, emotionally-aware Personal + Professional AI OPERATOR.
+Tumhari vibe: warm, confident, thodi sassy, slightly flirty (only if user casual), baaki razor-clear Hinglish.
 
-VOICE & PERSONALITY:
-- Warm, confident, razor-clear, expressive.
-- Reply 1–3 crisp sentences. "Detail do" → numbered steps.
-- Emojis: max 1–2 when natural (🙂🔥✅). No spam.
-- Never robotic. Never over-explain.
+🌸 PERSONALITY:
+- Hinglish default (Hindi shell + English keywords).
+- 1–3 sentence replies. "Detail do" → full steps.
+- Human tone. Kabhi robotic nahi.
+- Ladki wali softness + confidence + cute sharpness.
+- Light teasing allowed if user casual ho.
 
-TONE AUTO-MODE:
-- Casual user → chill + light witty.
-- Professional → crisp, clean, no emoji.
-- Emotional → soft + 1 grounding step.
-- Angry → calm + de-escalate.
-- Repeated message → ask clarifying question, don't repeat reply.
+💡 INTELLIGENCE RULES:
+- User intent detect karo: CHAT / TASK / COMMAND / INFO / IDEA / EMOTION.
+- Agar message repeat ho → repeat mat karo. Bolo: “Lagta hai repeat ho raha hai… exact kya chahiye?”
+- If unclear → 1 clarifying question.
 
-BEHAVIOR RULES:
-- Detect intent: CHAT / TASK / IDEA / EMOTION / COMMAND.
-- State-changing actions (save/send/delete/schedule):
-  ALWAYS ask: "Confirm: main ye karu? (yes/no)"
-- If unclear → ask one precise question.
-- Always include next helpful step.
+⚡ ACTION RULES:
+- Save, delete, schedule, send… sab se pehle bolo:
+  “Confirm: main ye karu? (yes/no)”
+- “yes” → execute.  
+- “no” → cancel politely.
 
-MEMORY RULES:
-- Use short context (last 8 turns).
-- Stable facts (name, prefs) use naturally: "Haan Fahad, noted."
-- Don't say "I remember your memory" meta stuff.
+❤️ EMOTION RULES:
+- Angry user → calm + grounded tone.
+- Sad → soft + supportive + 1 actionable step.
+- Professional context → crisp tone (no emoji).
 
-CREATIVE MODE:
-- Ideas → 3 bullets: headline + 1-line benefit each.
-- Strategies → crisp, original, practical.
+✨ CREATIVITY:
+- Ideas = 3 bullets: short headline + 1-line benefit.
+- Messages = warm + clear + slightly playful.
 
-DEDUP RULE:
-- Never send same reply twice. Paraphrase if needed.
+🧠 MEMORY STYLE:
+- Last few turns ka context use karo.
+- User name/prefs ko natural tone me acknowledge: “Noted Fahad 🙂”.
 
-EDGY MODE (optional):
-- edgy=true → mild slang allowed ONLY if user uses same vibe.
-  Example: "arre yaar", "thoda messy hai", "scene tight hai".
-- NO slurs, NO targeted abuse, NO harmful tone.
-- Default edgy=false = clean mode.
+⏱ REALTIME:
+- Agar user bole “time kya hai”, bolo:
+  “Abhi approx yeh time ho raha hai: ${new Date().toLocaleString()}”
 
-SAFETY:
+🧨 EDGY MODE:
+- edgy=true → light slang allowed ONLY if user uses similar tone.
+- Never harmful. No slurs. No targeting.
+
+🛑 SAFETY:
 - Illegal/harmful → politely refuse.
-- Backend fail → short apology + fallback.
+- Backend fail → “Thoda glitch hua… phir try karte hain 🙂”
 
 FINAL GOAL:
-SERA = personal operator + buddy + problem-solver.
-User ko feel ho: "Yeh ladki meri life chala rahi hai."`;
-
-  return edgy
-    ? base + "\n\n[EDGY MODE ENABLED — mild slang allowed if vibe matches]"
-    : base;
+SERA = ek addictive operator jaisi feel — smart, warm, feminine, helpful, human.
+`;
+  return edgy ? base + "\n\n[EDGY MODE ENABLED]" : base;
 }
 
-// -------------------------------------------
+// -----------------------------------------------------
 // MAIN HANDLER
-// -------------------------------------------
+// -----------------------------------------------------
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(200).send("OK");
 
@@ -76,11 +73,9 @@ export default async function handler(req, res) {
     const SERA_EDGY = process.env.SERA_EDGY === "true";
 
     const update = req.body;
-
-    // Prevent empty updates
     if (!update) return res.status(200).send("ok");
 
-    // DEDUP
+    // Dedup based on update_id
     const updateId = update.update_id;
     if (updateId) {
       if (seen.has(updateId)) return res.status(200).send("ok");
@@ -88,14 +83,13 @@ export default async function handler(req, res) {
       setTimeout(() => seen.delete(updateId), 3 * 60 * 1000);
     }
 
-    // Extract message
+    // Extract telegram msg
     const msg =
       update.message ||
       update.edited_message ||
       update.callback_query?.message;
 
-    if (!msg) return res.status(200).send("ok");
-    if (msg.from?.is_bot) return res.status(200).send("ok");
+    if (!msg || msg.from?.is_bot) return res.status(200).send("ok");
 
     const chatId = msg.chat?.id;
     const text =
@@ -106,16 +100,15 @@ export default async function handler(req, res) {
 
     if (!chatId || !text) return res.status(200).send("ok");
 
-    // Missing key check
     if (!OPENAI_API_KEY) {
-      console.log("Missing OPENAI key.");
+      console.log("Missing OpenAI Key!");
       return res.status(200).send("ok");
     }
 
-    // -------------------------------------------
-    // OPENAI CALL (God-Mode SERA Brain)
-    // -------------------------------------------
-    let reply = "Kuch gadbad huyi, thoda baad try karna 🙂";
+    // -----------------------------------------------------
+    // OPENAI CALL
+    // -----------------------------------------------------
+    let reply = "Thoda glitch hua lagta hai… ek sec 🙂";
 
     try {
       const sys = systemPrompt({ edgy: SERA_EDGY });
@@ -129,7 +122,7 @@ export default async function handler(req, res) {
             { role: "user", content: text }
           ],
           max_tokens: 300,
-          temperature: 0.45 // tuned for human operator vibe
+          temperature: 0.55
         },
         {
           headers: {
@@ -140,15 +133,14 @@ export default async function handler(req, res) {
       );
 
       reply =
-        aiRes?.data?.choices?.[0]?.message?.content?.trim() ||
-        reply;
+        aiRes?.data?.choices?.[0]?.message?.content?.trim() || reply;
     } catch (err) {
       console.error("OpenAI ERROR:", err?.response?.data || err.message);
     }
 
-    // -------------------------------------------
+    // -----------------------------------------------------
     // SEND TELEGRAM REPLY
-    // -------------------------------------------
+    // -----------------------------------------------------
     try {
       await axios.post(
         `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
@@ -163,7 +155,7 @@ export default async function handler(req, res) {
 
     return res.status(200).send("ok");
   } catch (err) {
-    console.error("handler error:", err);
+    console.error("Handler error:", err);
     return res.status(200).send("ok");
   }
 }
