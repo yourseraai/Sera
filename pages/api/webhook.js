@@ -1,168 +1,188 @@
 // pages/api/webhook.js
 import axios from "axios";
-import { telegramSend, getTimeForCountry, convertCurrency } from "../../lib/seraHelpers";
-import { detectIntent } from "../../lib/intent";
-import { getUser, saveUser, extractName } from "../../lib/onboarding";
+import {
+  nowIndia,
+  getTimeForCountry,
+  convertCurrency,
+  telegramSend,
+  systemPrompt,
+} from "../../lib/seraHelpers";
 
-/* ========== MEMORY (DEV – later Supabase replace) ========== */
-const notes = new Map(); // chatId -> [{ text, ts }]
+import {
+  getUserMemory,
+  saveUserMemory,
+  saveNote,
+  getLastNote,
+  logConversation,
+} from "../../lib/memory";
 
-/* ========== HELPERS ========== */
-function getNotes(chatId) {
-  if (!notes.has(chatId)) notes.set(chatId, []);
-  return notes.get(chatId);
-}
+/* ---------------- MAIN HANDLER ---------------- */
 
-function address(user) {
-  if (user.address === "sir") return "Sir";
-  if (user.avoidName) return "";
-  return user.name || "";
-}
-
-function prefix(user) {
-  const a = address(user);
-  return a ? `${a}, ` : "";
-}
-
-/* ========== MAIN HANDLER ========== */
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).send("OK");
+  if (req.method !== "POST") return res.end("OK");
 
   const msg = req.body.message;
-  if (!msg || !msg.text) return res.status(200).send("OK");
+  if (!msg || !msg.text) return res.end("OK");
 
-  const chatId = msg.chat.id;
+  const chatId = String(msg.chat.id);
   const text = msg.text.trim();
-  const intent = detectIntent(text);
-  const user = getUser(chatId);
 
-  /* ========== ONBOARDING (NON-BLOCKING) ========== */
-  if (user.state === "NEW_USER" && intent === "GREETING") {
+  /* -------- LOAD MEMORY -------- */
+  let user = await getUserMemory(chatId);
+
+  /* -------- LOG USER MESSAGE -------- */
+  await logConversation(chatId, "user", text);
+
+  /* =====================================================
+     🟢 ONBOARDING STATE MACHINE
+     ===================================================== */
+
+  // 1️⃣ NEW USER → Ask name ONCE
+  if (user.state === "NEW_USER") {
+    user.state = "ASK_NAME";
+    await saveUserMemory(chatId, user);
+
     await telegramSend(
       chatId,
-      "Hi 🙂 Main Sera hoon — tumhari personal operator.\nNaam batana chaaho toh bata do, warna kaam bol do. Dono chalega."
+      "Hi! Main Sera hoon — tumhara AI operator.\nBas ek baar bata do: tumhara naam kya hai?"
     );
-    saveUser(chatId, { state: "READY" });
     return res.end("OK");
   }
 
-  if (!user.name && intent === "NAME_INPUT") {
-    const name = extractName(text);
-    if (name) {
-      saveUser(chatId, { name });
-      await telegramSend(chatId, `Got it. Yaad rahega 🙂`);
+  // 2️⃣ ASK_NAME → Validate name
+  if (user.state === "ASK_NAME") {
+    // ❌ Reject reactions / abuse / questions
+    if (
+      text.includes("?") ||
+      text.length > 25 ||
+      /abe|bc|lol|ha+|accha/i.test(text)
+    ) {
+      await telegramSend(
+        chatId,
+        "Bas apna **naam** likh do 🙂"
+      );
       return res.end("OK");
     }
-  }
 
-  /* ========== PREFERENCES ========== */
-  if (intent === "SET_ADDRESS_SIR") {
-    saveUser(chatId, { address: "sir" });
-    await telegramSend(chatId, "Understood. Main aapko Sir bolungi.");
+    user.name = text;
+    user.state = "READY";
+    await saveUserMemory(chatId, user);
+
+    await telegramSend(
+      chatId,
+      `Perfect. Yaad rahega.\nAb batao — kya kaam hai?`
+    );
     return res.end("OK");
   }
 
-  if (intent === "AVOID_NAME") {
-    saveUser(chatId, { avoidName: true });
+  /* =====================================================
+     🔵 PREFERENCES (Address / Tone)
+     ===================================================== */
+
+  if (/sir bolo|call me sir/i.test(text)) {
+    user.addressAs = "Sir";
+    await saveUserMemory(chatId, user);
+    await telegramSend(chatId, "Understood. Main aapko **Sir** kehkar address karungi.");
+    return res.end("OK");
+  }
+
+  if (/naam se mat bulao/i.test(text)) {
+    user.addressAs = null;
+    await saveUserMemory(chatId, user);
     await telegramSend(chatId, "Theek hai. Naam use nahi karungi.");
     return res.end("OK");
   }
 
-  /* ========== TIME ========== */
-  if (intent === "TIME_QUERY") {
+  if (/professional reh/i.test(text)) {
+    user.tone = "professional";
+    await saveUserMemory(chatId, user);
+    await telegramSend(chatId, "Professional mode enabled.");
+    return res.end("OK");
+  }
+
+  /* =====================================================
+     ⏰ TIME
+     ===================================================== */
+
+  if (/time|samay|kitna baj/i.test(text)) {
     if (/india/i.test(text)) {
-      const t = await getTimeForCountry("Asia/Kolkata");
-      await telegramSend(chatId, `🇮🇳 India: ${t.time} (${t.date})`);
+      await telegramSend(chatId, `🇮🇳 India: ${nowIndia()}`);
       return res.end("OK");
     }
 
-    const countryMatch = text.match(/japan|usa|uk|canada|australia/i);
-    if (countryMatch) {
-      const country = countryMatch[0];
-      const other = await getTimeForCountry(country);
-      const india = await getTimeForCountry("Asia/Kolkata");
-      await telegramSend(
-        chatId,
-        `🌍 ${country.toUpperCase()}: ${other.time} (${other.date})\n🇮🇳 India: ${india.time}`
-      );
+    const match = text.match(/japan|usa|uk/i);
+    if (match) {
+      const t = await getTimeForCountry(match[0]);
+      if (t.ok) {
+        await telegramSend(
+          chatId,
+          `🌍 ${match[0].toUpperCase()}: ${t.datetime} (${t.date})\n🇮🇳 India: ${nowIndia()}`
+        );
+      }
       return res.end("OK");
     }
   }
 
-  /* ========== CURRENCY ========== */
-  if (intent === "CURRENCY_QUERY") {
-    const amt = text.match(/\d+/)?.[0];
-    if (amt) {
-      if (/usd/i.test(text) && /inr|rs/i.test(text)) {
-        const r = await convertCurrency(amt, "USD", "INR");
-        await telegramSend(chatId, `${amt} USD ≈ ${r.toFixed(2)} INR`);
-        return res.end("OK");
-      }
-      if (/inr|rs/i.test(text)) {
-        const r = await convertCurrency(amt, "INR", "USD");
-        await telegramSend(chatId, `${amt} INR ≈ ${r.toFixed(2)} USD`);
-        return res.end("OK");
-      }
+  /* =====================================================
+     💱 CURRENCY
+     ===================================================== */
+
+  if (/\d+/.test(text) && /(inr|usd|jpy|rs|dollar)/i.test(text)) {
+    const amt = Number(text.match(/\d+/)[0]);
+
+    if (/usd/i.test(text) && /inr/i.test(text)) {
+      const r = await convertCurrency(amt, "USD", "INR");
+      await telegramSend(chatId, `${amt} USD ≈ ${r.result.toFixed(2)} INR`);
+      return res.end("OK");
+    }
+
+    if (/inr/i.test(text) && /usd/i.test(text)) {
+      const r = await convertCurrency(amt, "INR", "USD");
+      await telegramSend(chatId, `${amt} INR ≈ ${r.result.toFixed(2)} USD`);
+      return res.end("OK");
     }
   }
 
-  /* ========== NOTES ========== */
-  if (intent === "TASK_CREATE") {
-    const arr = getNotes(chatId);
-    arr.push({ text, ts: Date.now() });
-    await telegramSend(chatId, `✅ Saved.`);
+  /* =====================================================
+     📝 NOTES
+     ===================================================== */
+
+  if (/call|meeting|note|remind/i.test(text)) {
+    await saveNote(chatId, text);
+    await telegramSend(chatId, "✅ Saved.");
     return res.end("OK");
   }
 
-  if (intent === "TASK_QUERY") {
-    const arr = getNotes(chatId);
-    if (!arr.length) {
-      await telegramSend(chatId, "Koi note nahi mila.");
-    } else {
-      await telegramSend(chatId, `📝 Last note:\n${arr[arr.length - 1].text}`);
-    }
+  if (/last saved note/i.test(text)) {
+    const note = await getLastNote(chatId);
+    await telegramSend(chatId, note ? `📝 ${note}` : "Koi note nahi mila.");
     return res.end("OK");
   }
 
-  if (intent === "TASK_DELETE") {
-    const arr = getNotes(chatId);
-    if (!arr.length) {
-      await telegramSend(chatId, "Koi note nahi hai delete karne ke liye.");
-    } else {
-      const removed = arr.pop();
-      await telegramSend(chatId, `🗑️ Deleted:\n${removed.text}`);
-    }
-    return res.end("OK");
-  }
+  /* =====================================================
+     🤖 GPT FALLBACK
+     ===================================================== */
 
-  /* ========== CONTENT (GPT – STRICT OUTPUT) ========== */
-  if (intent === "CONTENT_REQUEST" || intent === "IDEAS") {
-    const completion = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are SERA. Respond in Hinglish. Be precise. No repetition. Follow instructions exactly."
-          },
-          { role: "user", content: text }
-        ],
-        temperature: 0.4
+  const reply = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt({ edgy: false }) },
+        { role: "user", content: text },
+      ],
+      temperature: 0.4,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-        }
-      }
-    );
+    }
+  );
 
-    await telegramSend(chatId, completion.data.choices[0].message.content);
-    return res.end("OK");
-  }
+  const output = reply.data.choices[0].message.content;
+  await logConversation(chatId, "assistant", output);
+  await telegramSend(chatId, output);
 
-  /* ========== FALLBACK ========== */
-  await telegramSend(chatId, `${prefix(user)}bolo kya karna hai.`);
-  return res.end("OK");
+  res.end("OK");
 }
