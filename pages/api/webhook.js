@@ -5,29 +5,18 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body;
-
-    const msg =
-      body.message ||
-      body.edited_message ||
-      body.channel_post ||
-      null;
+    const msg = body.message || body.edited_message;
 
     if (!msg) return res.status(200).end();
 
     const chatId = msg.chat?.id;
-    const text =
-      typeof msg.text === "string"
-        ? msg.text.trim()
-        : "";
+    const text = typeof msg.text === "string" ? msg.text.trim() : "";
 
     if (!chatId) return res.status(200).end();
 
-    // 🔥 VERY IMPORTANT: DO NOT DROP SHORT / WEIRD TEXT
-    const safeText = text.length ? text : "__empty__";
-
     await processMessage({
       chatId: String(chatId),
-      text: safeText,
+      text: text || "__empty__",
     });
 
     return res.status(200).end();
