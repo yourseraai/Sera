@@ -1,17 +1,38 @@
 import { processMessage } from "../../lib/seraBrain";
-import { sendTelegram } from "../../lib/seraHelpers";
 
 export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(200).end();
+
   try {
-    const msg = req.body.message;
-    const chatId = msg.chat.id;
-    const text = msg.text;
+    const body = req.body;
 
-    const reply = processMessage(chatId, text);
-    await sendTelegram(chatId, reply);
+    const msg =
+      body.message ||
+      body.edited_message ||
+      body.channel_post ||
+      null;
 
-    res.status(200).json({ ok: true });
-  } catch (e) {
-    res.status(200).json({ ok: true });
+    if (!msg) return res.status(200).end();
+
+    const chatId = msg.chat?.id;
+    const text =
+      typeof msg.text === "string"
+        ? msg.text.trim()
+        : "";
+
+    if (!chatId) return res.status(200).end();
+
+    // 🔥 VERY IMPORTANT: DO NOT DROP SHORT / WEIRD TEXT
+    const safeText = text.length ? text : "__empty__";
+
+    await processMessage({
+      chatId: String(chatId),
+      text: safeText,
+    });
+
+    return res.status(200).end();
+  } catch (err) {
+    console.error("Webhook error:", err);
+    return res.status(200).end();
   }
 }
