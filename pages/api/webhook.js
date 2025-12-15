@@ -1,27 +1,24 @@
+// pages/api/webhook.js
+
+import { telegramSend } from "../../lib/seraHelpers";
 import { processMessage } from "../../lib/seraBrain";
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).end();
-
   try {
-    const body = req.body;
-    const msg = body.message || body.edited_message;
+    if (req.method !== "POST") return res.status(200).end();
 
-    if (!msg) return res.status(200).end();
+    const msg = req.body.message;
+    if (!msg || !msg.text) return res.status(200).end();
 
-    const chatId = msg.chat?.id;
-    const text = typeof msg.text === "string" ? msg.text.trim() : "";
+    const chatId = String(msg.chat.id);
+    const text = msg.text;
 
-    if (!chatId) return res.status(200).end();
+    const reply = await processMessage(chatId, text);
+    await telegramSend(chatId, reply);
 
-    await processMessage({
-      chatId: String(chatId),
-      text: text || "__empty__",
-    });
-
-    return res.status(200).end();
+    res.status(200).end();
   } catch (err) {
     console.error("Webhook error:", err);
-    return res.status(200).end();
+    res.status(200).end();
   }
 }
