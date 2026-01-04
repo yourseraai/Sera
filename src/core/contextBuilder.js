@@ -1,11 +1,15 @@
-const roleResolver = require("../identity/roleResolver")
+const { getUser, createUser } = require("../memory/userRepo");
+const { getBusiness, createBusiness } = require("../memory/businessRepo");
 
-module.exports = function contextBuilder(msg) {
-  return {
-    userId: msg.from.id,
-    businessId: msg.chat.id,
-    role: roleResolver(msg.from.id),
-    plan: process.env.DEFAULT_PLAN || "free",
-    timestamp: Date.now()
-  }
+async function buildContext(ctx) {
+  let user = getUser(ctx.userId);
+  if (!user) user = createUser(ctx.userId);
+
+  let business = getBusiness(ctx.userId);
+  if (!business) business = createBusiness(ctx.userId);
+
+  ctx.user = user;
+  ctx.business = business;
 }
+
+module.exports = buildContext;
