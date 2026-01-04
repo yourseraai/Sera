@@ -1,15 +1,12 @@
-// src/index.js
-
 require("dotenv").config();
 const express = require("express");
-const bodyParser = require("body-parser");
 
 const telegramReceiver = require("./channels/telegram/receiver");
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
-// 🔥 HARD PROOF LOG
+// HARD PROOF LOG (yeh dikhna hi chahiye)
 console.log("🔑 TELEGRAM_BOT_TOKEN AT START =", process.env.TELEGRAM_BOT_TOKEN);
 
 app.get("/", (req, res) => {
