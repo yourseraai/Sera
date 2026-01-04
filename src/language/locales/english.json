@@ -1,0 +1,6 @@
+{
+  "FOLLOW_UP_ACK": "Follow-up has been scheduled",
+  "REMINDER_ACK": "Reminder has been set",
+  "BROADCAST_ACK": "Broadcast prepared, confirmation required",
+  "UNKNOWN": "Command not clear"
+}
