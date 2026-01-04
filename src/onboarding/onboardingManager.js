@@ -1,137 +1,118 @@
-const businessRepo = require("../memory/businessRepo")
-const commandRepo = require("../memory/commandRepo")
+// onboardingManager.js
 
-const STEPS = {
-  SALUTATION: "SALUTATION",
-  OWNER_NAME: "OWNER_NAME",
-  BUSINESS_NAME: "BUSINESS_NAME",
-  BUSINESS_TYPE: "BUSINESS_TYPE",
-  WORKING_HOURS: "WORKING_HOURS",
-  FOLLOW_UP_RULE: "FOLLOW_UP_RULE",
-  COMPLETED: "COMPLETED"
-}
+const { getUser, updateUser } = require("../memory/userRepo");
+const { getBusiness, updateBusiness } = require("../memory/businessRepo");
 
-function getPrompt(step) {
-  switch (step) {
-    case STEPS.SALUTATION:
-      return `Welcome 👋  
-SERA ko setup karne ke liye 2 minute lagenge.
+function onboardingManager(ctx) {
+  const message = ctx.message.toLowerCase();
+  const user = ctx.user;
+  const business = ctx.business;
 
-Aap choose karein:
-1️⃣ Mr  
-2️⃣ Ms`
+  // 0️⃣ Correction-first (sabse upar)
+  if (handleCorrection(ctx)) return;
 
-    case STEPS.OWNER_NAME:
-      return "Aapka full naam batayein"
+  // 1️⃣ State-based flow
+  switch (user.onboardingState) {
+    case "OWNER_IDENTITY":
+      handleOwnerIdentity(ctx);
+      break;
 
-    case STEPS.BUSINESS_NAME:
-      return "Business ka naam kya hai?"
+    case "BUSINESS_IDENTITY":
+      handleBusinessIdentity(ctx);
+      break;
 
-    case STEPS.BUSINESS_TYPE:
-      return `Business type choose karein:
-1️⃣ Service
-2️⃣ Product
-3️⃣ Local Shop
-4️⃣ Online`
-
-    case STEPS.WORKING_HOURS:
-      return "Working hours batayein (Example: 10am–7pm)"
-
-    case STEPS.FOLLOW_UP_RULE:
-      return `Default follow-up rule choose karein:
-1️⃣ 1 day baad
-2️⃣ 2 days baad
-3️⃣ Manual`
+    case "ONBOARDING_COMPLETE":
+      // Phase-1 me kuch nahi karna
+      break;
 
     default:
-      return null
+      user.onboardingState = "OWNER_IDENTITY";
+      updateUser(user);
+      ctx.reply("Aapka naam?");
   }
 }
 
-function applyResponse(business, text) {
-  switch (business.onboarding.step) {
-    case STEPS.SALUTATION:
-      business.ownerSalutation = text.includes("1") ? "Mr" : "Ms"
-      business.ownerGender =
-        business.ownerSalutation === "Mr" ? "male" : "female"
-      business.onboarding.step = STEPS.OWNER_NAME
-      break
+/* =========================
+   CORRECTION HANDLER
+========================= */
 
-    case STEPS.OWNER_NAME:
-      business.ownerName = text
-      business.onboarding.step = STEPS.BUSINESS_NAME
-      break
+function handleCorrection(ctx) {
+  const msg = ctx.message.toLowerCase();
+  const user = ctx.user;
+  const business = ctx.business;
 
-    case STEPS.BUSINESS_NAME:
-      business.businessName = text
-      business.onboarding.step = STEPS.BUSINESS_TYPE
-      break
+  const isCorrection =
+    msg.includes("galat") ||
+    msg.includes("nahi") ||
+    msg.includes("wrong");
 
-    case STEPS.BUSINESS_TYPE:
-      business.businessType = text
-      business.onboarding.step = STEPS.WORKING_HOURS
-      break
+  if (!isCorrection) return false;
 
-    case STEPS.WORKING_HOURS:
-      business.workingHours = text
-      business.onboarding.step = STEPS.FOLLOW_UP_RULE
-      break
-
-    case STEPS.FOLLOW_UP_RULE:
-      business.followUpRule = text
-      business.createdAt = Date.now()
-      business.onboarding.completed = true
-      business.onboarding.step = STEPS.COMPLETED
-      break
+  // Name correction
+  const nameMatch = ctx.message.match(/naam\s+(.+)/i);
+  if (nameMatch) {
+    user.ownerName = cleanValue(nameMatch[1]);
+    updateUser(user);
+    ctx.reply(`Samjha. Main aapka naam **${user.ownerName}** save kar raha hoon.`);
+    return true;
   }
 
-  businessRepo.save(business)
+  // Business correction
+  const bizMatch = ctx.message.match(/business\s+(.+)/i);
+  if (bizMatch) {
+    business.name = cleanValue(bizMatch[1]);
+    updateBusiness(business);
+    ctx.reply("Theek hai. Business name update kar diya.");
+    return true;
+  }
+
+  return false;
 }
 
-function startOnboarding(businessId) {
-  const business = {
-    businessId,
-    onboarding: {
-      completed: false,
-      step: STEPS.SALUTATION
-    }
+/* =========================
+   OWNER IDENTITY
+========================= */
+
+function handleOwnerIdentity(ctx) {
+  const user = ctx.user;
+
+  if (!user.ownerName) {
+    ctx.reply("Aapka naam?");
+    return;
   }
 
-  businessRepo.save(business)
-  return getPrompt(STEPS.SALUTATION)
+  // Naam mil gaya → next state
+  user.onboardingState = "BUSINESS_IDENTITY";
+  updateUser(user);
+  ctx.reply("Business ka naam?");
 }
 
-function processMessage(businessId, text, intent = null) {
-  commandRepo.save(businessId, text, intent)
+/* =========================
+   BUSINESS IDENTITY
+========================= */
 
-  const business = businessRepo.get(businessId)
+function handleBusinessIdentity(ctx) {
+  const business = ctx.business;
+  const user = ctx.user;
 
-  if (!business) {
-    return startOnboarding(businessId)
+  if (!business.name) {
+    ctx.reply("Business ka naam?");
+    return;
   }
 
-  if (business.onboarding.completed) {
-    return null
-  }
+  // Business mil gaya → onboarding complete
+  user.onboardingState = "ONBOARDING_COMPLETE";
+  updateUser(user);
 
-  applyResponse(business, text)
-
-  if (business.onboarding.completed) {
-    return `✅ Setup complete, ${business.ownerSalutation} ${business.ownerName}
-
-Ab aap SERA ko commands de sakte hain:
-• new lead
-• follow up
-• reminder
-• show pending
-
-— SERA`
-  }
-
-  return getPrompt(business.onboarding.step)
+  ctx.reply("Theek hai. Main ready hoon.");
 }
 
-module.exports = {
-  processMessage,
-  STEPS
+/* =========================
+   UTILS
+========================= */
+
+function cleanValue(val) {
+  return val.replace(/[^a-zA-Z0-9\s]/g, "").trim();
 }
+
+module.exports = onboardingManager;
