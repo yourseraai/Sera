@@ -1,45 +1,56 @@
-const axios = require("axios");
-
+const buildContext = require("../../core/contextBuilder");
+const classifyMessage = require("../../core/messageClassifier");
 const onboardingManager = require("../../onboarding/onboardingManager");
 const handleMemoryQA = require("../../core/memoryQA");
-const intentDetector = require("../../core/intentDetector");
-const buildContext = require("../../core/contextBuilder");
+const followUpExecutor = require("../../execution/followUpExecutor");
+const confirmationHandler = require("../../execution/confirmationHandler");
+const { getConversation } = require("../../memory/conversationRepo");
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-
-module.exports = async function telegramReceiver(req, res) {
+async function telegramReceiver(req, res) {
   try {
-    const body = req.body;
-
-    if (!body.message || !body.message.text) {
-      return res.sendStatus(200);
-    }
+    const msg = req.body.message;
+    if (!msg || !msg.text) return res.sendStatus(200);
 
     const ctx = {
-      message: body.message.text,
-      chatId: body.message.chat.id,
-      userId: body.message.from.id,
-      reply: async (text) => {
-        return axios.post(
-          `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-          {
-            chat_id: body.message.chat.id,
-            text
-          }
-        );
-      }
+      userId: msg.from.id,
+      message: msg.text,
+      reply: (t) => sendTelegramMessage(msg.chat.id, t)
     };
 
     await buildContext(ctx);
 
-    if (handleMemoryQA(ctx)) return res.sendStatus(200);
+    const convo = getConversation(ctx.user.userId);
+    const intent = classifyMessage(ctx.message);
 
-    onboardingManager(ctx);
-    intentDetector(ctx);
+    // 🔒 AGENDA LOCK
+    if (convo.activeAgenda === "CONFIRMATION") {
+      confirmationHandler(ctx);
+      return res.sendStatus(200);
+    }
 
+    if (ctx.user.onboardingState !== "ONBOARDING_DONE") {
+      onboardingManager(ctx);
+      return res.sendStatus(200);
+    }
+
+    if (intent === "NO_OP") {
+      return res.sendStatus(200);
+    }
+
+    if (intent === "QUESTION" && handleMemoryQA(ctx)) {
+      return res.sendStatus(200);
+    }
+
+    if (intent === "COMMAND" && followUpExecutor(ctx)) {
+      return res.sendStatus(200);
+    }
+
+    ctx.reply("Samajh nahi aaya. Follow-up ya reminder bol sakte ho 🙂");
     res.sendStatus(200);
-  } catch (err) {
-    console.error("Telegram receiver error:", err);
+  } catch (e) {
+    console.error("Telegram error:", e);
     res.sendStatus(200);
   }
-};
+}
+
+module.exports = telegramReceiver;
